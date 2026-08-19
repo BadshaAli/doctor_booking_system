@@ -21,6 +21,8 @@ urlpatterns = [
     path('doctors/', DoctorListView.as_view(), name='doctor-list'),
     path('doctors/<int:pk>/', DoctorDetailView.as_view(), name='doctor-detail'),
     path('doctors/<int:doctor_id>/slots/', DoctorSlotsView.as_view(), name='doctor-slots'),
+    path('doctor/slots/', DoctorSlotsView.as_view(), name='my-doctor-slots'),
+
 
     # Appointments
     path('appointments/book/', BookAppointmentView.as_view(), name='book-appointment'),

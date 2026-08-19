@@ -3,7 +3,8 @@ import { useAuth, API_BASE_URL } from '../context/AuthContext';
 import { X, Calendar, Clock, AlertCircle, MapPin } from 'lucide-react';
 
 export const BookingModal = ({ doctor, onClose, onSuccess }) => {
-  const { token, showToast, isAuthenticated } = useAuth();
+  const { token, showToast, isAuthenticated, user, role, doctorProfile } = useAuth();
+
   const [availableSlots, setAvailableSlots] = useState([]);
   const [selectedSlot, setSelectedSlot] = useState(null);
   const [bookingDate, setBookingDate] = useState(new Date().toISOString().split('T')[0]);
@@ -37,10 +38,23 @@ export const BookingModal = ({ doctor, onClose, onSuccess }) => {
       showToast('Please sign in to book an appointment', 'error');
       return;
     }
+    // Check if user is an Admin
+    if (role === 'ADMIN' || user?.role === 'ADMIN') {
+      showToast('System Administrators cannot book appointments. Please sign in with a patient account.', 'error');
+      return;
+    }
+    // Check if the user is a doctor attempting to book themselves
+    const isSelfBooking = user?.id === doctor?.user?.id || (doctorProfile && doctorProfile.id === doctor?.id);
+    if (isSelfBooking) {
+      showToast('Doctors cannot book appointments with themselves.', 'error');
+      return;
+    }
+
     if (!selectedSlot) {
       showToast('Please select an available chamber time slot', 'error');
       return;
     }
+
     if (!symptoms.trim()) {
       showToast('Please describe your symptoms or reason for visit', 'error');
       return;

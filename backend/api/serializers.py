@@ -10,16 +10,24 @@ class UserSerializer(serializers.ModelSerializer):
 
 class DoctorProfileSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
-    # Flat convenience fields for admin tables
+    # Flat convenience fields for admin tables & individual doctor cards
     user_first_name = serializers.SerializerMethodField()
     user_last_name  = serializers.SerializerMethodField()
+    prescribed_count = serializers.SerializerMethodField()
+    completed_appointments_count = serializers.SerializerMethodField()
+    total_appointments_count = serializers.SerializerMethodField()
+    gross_revenue = serializers.SerializerMethodField()
+    platform_fee_10 = serializers.SerializerMethodField()
+    doctor_net_payout = serializers.SerializerMethodField()
 
     class Meta:
         model = DoctorProfile
         fields = [
             'id', 'user', 'user_first_name', 'user_last_name',
             'specialty', 'qualification', 'experience_years',
-            'consultation_fee', 'district', 'hospital', 'bio', 'rating', 'total_reviews', 'image_url'
+            'consultation_fee', 'district', 'hospital', 'bio', 'rating', 'total_reviews', 'image_url',
+            'prescribed_count', 'completed_appointments_count', 'total_appointments_count',
+            'gross_revenue', 'platform_fee_10', 'doctor_net_payout'
         ]
 
     def get_user_first_name(self, obj):
@@ -27,6 +35,28 @@ class DoctorProfileSerializer(serializers.ModelSerializer):
 
     def get_user_last_name(self, obj):
         return obj.user.last_name
+
+    def get_prescribed_count(self, obj):
+        return Prescription.objects.filter(appointment__doctor=obj).count()
+
+    def get_completed_appointments_count(self, obj):
+        return Appointment.objects.filter(doctor=obj, status='COMPLETED').count()
+
+    def get_total_appointments_count(self, obj):
+        return Appointment.objects.filter(doctor=obj).count()
+
+    def get_gross_revenue(self, obj):
+        completed = Appointment.objects.filter(doctor=obj, status='COMPLETED').count()
+        return round(completed * float(obj.consultation_fee), 2)
+
+    def get_platform_fee_10(self, obj):
+        gross = self.get_gross_revenue(obj)
+        return round(gross * 0.10, 2)
+
+    def get_doctor_net_payout(self, obj):
+        gross = self.get_gross_revenue(obj)
+        return round(gross * 0.90, 2)
+
 
 
 class AvailabilitySlotSerializer(serializers.ModelSerializer):

@@ -229,12 +229,22 @@ class DoctorSlotsView(APIView):
             return [permissions.AllowAny()]
         return [permissions.IsAuthenticated()]
 
-    def get(self, request, doctor_id):
-        slots = AvailabilitySlot.objects.filter(doctor_id=doctor_id, date__gte=date.today())
+    def get(self, request, doctor_id=None):
+        if not doctor_id and hasattr(request.user, 'doctor_profile'):
+            doctor_id = request.user.doctor_profile.id
+
+        if not doctor_id:
+            return Response({'error': 'Doctor ID required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        slots = AvailabilitySlot.objects.filter(doctor_id=doctor_id).order_by('date', 'start_time')
         return Response(AvailabilitySlotSerializer(slots, many=True).data)
 
-    def post(self, request, doctor_id):
-        if not hasattr(request.user, 'doctor_profile') or request.user.doctor_profile.id != int(doctor_id):
+    def post(self, request, doctor_id=None):
+        if not hasattr(request.user, 'doctor_profile'):
+            return Response({'error': 'Unauthorized: Only registered doctors can manage chamber slots'}, status=status.HTTP_403_FORBIDDEN)
+
+        doc = request.user.doctor_profile
+        if doctor_id and str(doc.id) != str(doctor_id):
             return Response({'error': 'Unauthorized to manage these slots'}, status=status.HTTP_403_FORBIDDEN)
 
         slot_date = request.data.get('date')
@@ -244,25 +254,28 @@ class DoctorSlotsView(APIView):
         if not slot_date or not start_time or not end_time:
             return Response({'error': 'Date, start_time and end_time are required'}, status=status.HTTP_400_BAD_REQUEST)
 
-        slot = AvailabilitySlot.objects.create(
-            doctor_id=doctor_id,
+        slot, created = AvailabilitySlot.objects.get_or_create(
+            doctor=doc,
             date=slot_date,
             start_time=start_time,
             end_time=end_time,
-            is_booked=False
+            defaults={'is_booked': False}
         )
         return Response(AvailabilitySlotSerializer(slot).data, status=status.HTTP_201_CREATED)
 
-    def delete(self, request, doctor_id):
-        slot_id = request.data.get('slot_id')
+    def delete(self, request, doctor_id=None):
+        slot_id = request.data.get('slot_id') or request.query_params.get('slot_id')
+        if not slot_id:
+            return Response({'error': 'slot_id required'}, status=status.HTTP_400_BAD_REQUEST)
         try:
-            slot = AvailabilitySlot.objects.get(pk=slot_id, doctor_id=doctor_id)
+            slot = AvailabilitySlot.objects.get(pk=slot_id)
             if slot.doctor.user != request.user:
                 return Response({'error': 'Unauthorized'}, status=status.HTTP_403_FORBIDDEN)
             slot.delete()
             return Response({'message': 'Slot deleted successfully'})
         except AvailabilitySlot.DoesNotExist:
             return Response({'error': 'Slot not found'}, status=status.HTTP_404_NOT_FOUND)
+
 
 
 class BookAppointmentView(APIView):
@@ -278,9 +291,24 @@ class BookAppointmentView(APIView):
         patient_notes = request.data.get('patient_notes', '')
 
         try:
-            doctor = DoctorProfile.objects.get(pk=doctor_id)
+            doctor = DoctorProfile.objects.select_related('user').get(pk=doctor_id)
         except DoctorProfile.DoesNotExist:
             return Response({'error': 'Doctor not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Disallow System Admin from booking appointments
+        if patient.role == 'ADMIN' or getattr(patient, 'is_superuser', False):
+            return Response(
+                {'error': 'System Administrators cannot book appointments for themselves. Please sign in with a patient account.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Disallow a doctor from booking an appointment with themselves
+        if doctor.user == patient or (hasattr(patient, 'doctor_profile') and patient.doctor_profile.id == doctor.id):
+            return Response(
+                {'error': 'You cannot book an appointment with yourself. Please log in as a patient to book appointments.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
 
         slot = None
         if slot_id:
@@ -478,10 +506,14 @@ class AdminStatsView(APIView):
         total_reviews = Review.objects.count()
         total_prescriptions = Prescription.objects.count()
 
-        # Revenue estimate (completed appointments × fee)
-        revenue = 0
+        # Revenue and Commission calculations (10% site commission)
+        total_gross_revenue = 0.0
         for app in Appointment.objects.filter(status='COMPLETED').select_related('doctor'):
-            revenue += float(app.doctor.consultation_fee)
+            if app.doctor:
+                total_gross_revenue += float(app.doctor.consultation_fee)
+
+        total_platform_commission = round(total_gross_revenue * 0.10, 2)
+        total_doctor_payouts = round(total_gross_revenue * 0.90, 2)
 
         # Doctors per district
         district_counts = list(
@@ -496,6 +528,39 @@ class AdminStatsView(APIView):
             'CANCELLED': cancelled_appointments,
         }
 
+        # Top earning doctors list for admin overview
+        doctors = DoctorProfile.objects.select_related('user').all()
+        doctor_financials = []
+        for doc in doctors:
+            completed_count = Appointment.objects.filter(doctor=doc, status='COMPLETED').count()
+            prescribed_count = Prescription.objects.filter(appointment__doctor=doc).count()
+            doc_gross = round(completed_count * float(doc.consultation_fee), 2)
+            doc_fee_10 = round(doc_gross * 0.10, 2)
+            doc_net = round(doc_gross * 0.90, 2)
+
+            doctor_financials.append({
+                'id': doc.id,
+                'name': f"Dr. {doc.user.first_name} {doc.user.last_name}".strip(),
+                'first_name': doc.user.first_name,
+                'specialty': doc.specialty,
+                'district': doc.district,
+                'fee': float(doc.consultation_fee),
+                'prescribed_count': prescribed_count,
+                'completed_count': completed_count,
+                'gross_revenue': doc_gross,
+                'platform_fee_10': doc_fee_10,
+                'doctor_net_payout': doc_net,
+            })
+
+        # Today's Revenue and Commission calculations (Daily basis)
+        today_gross_revenue = 0.0
+        for app in Appointment.objects.filter(status='COMPLETED', date=today).select_related('doctor'):
+            if app.doctor:
+                today_gross_revenue += float(app.doctor.consultation_fee)
+
+        today_platform_commission = round(today_gross_revenue * 0.10, 2)
+        today_doctor_payouts = round(today_gross_revenue * 0.90, 2)
+
         return Response({
             'total_doctors': total_doctors,
             'total_patients': total_patients,
@@ -507,10 +572,18 @@ class AdminStatsView(APIView):
             'confirmed_appointments': confirmed_appointments,
             'total_reviews': total_reviews,
             'total_prescriptions': total_prescriptions,
-            'total_revenue': round(revenue, 2),
+            'total_revenue': round(total_gross_revenue, 2),
+            'total_gross_revenue': round(total_gross_revenue, 2),
+            'total_platform_commission': total_platform_commission,
+            'total_doctor_payouts': total_doctor_payouts,
+            'today_gross_revenue': round(today_gross_revenue, 2),
+            'today_platform_commission': today_platform_commission,
+            'today_doctor_payouts': today_doctor_payouts,
             'district_counts': district_counts,
             'status_breakdown': status_breakdown,
+            'top_earning_doctors': doctor_financials[:6],
         })
+
 
 
 class AdminAllAppointmentsView(APIView):
@@ -579,8 +652,39 @@ class AdminAllDoctorsView(APIView):
         if district and district != 'All':
             doctors = doctors.filter(district__iexact=district)
 
-        serializer = DoctorProfileSerializer(doctors, many=True)
-        return Response(serializer.data)
+        results = []
+        for doc in doctors:
+            data = DoctorProfileSerializer(doc).data
+            # Compute financials & prescribed counts
+            total_appts = Appointment.objects.filter(doctor=doc).count()
+            completed_appts = Appointment.objects.filter(doctor=doc, status='COMPLETED').count()
+            prescribed_count = Prescription.objects.filter(appointment__doctor=doc).count()
+            gross_revenue = round(completed_appts * float(doc.consultation_fee), 2)
+            platform_fee_10 = round(gross_revenue * 0.10, 2)
+            doctor_net_payout = round(gross_revenue * 0.90, 2)
+
+            # Daily today metrics for daily settlement tracking
+            today = date.today()
+            today_completed = Appointment.objects.filter(doctor=doc, status='COMPLETED', date=today).count()
+            today_gross = round(today_completed * float(doc.consultation_fee), 2)
+            today_fee_10 = round(today_gross * 0.10, 2)
+            today_net = round(today_gross * 0.90, 2)
+
+            data['total_appointments_count'] = total_appts
+            data['completed_appointments_count'] = completed_appts
+            data['prescribed_count'] = prescribed_count
+            data['gross_revenue'] = gross_revenue
+            data['platform_fee_10'] = platform_fee_10
+            data['doctor_net_payout'] = doctor_net_payout
+            data['today_completed_count'] = today_completed
+            data['today_gross'] = today_gross
+            data['today_fee_10'] = today_fee_10
+            data['today_net'] = today_net
+            results.append(data)
+
+        return Response(results)
+
+
 
     def delete(self, request, pk):
         """Admin can remove a doctor."""
