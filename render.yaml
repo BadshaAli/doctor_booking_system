@@ -2,16 +2,16 @@ services:
   # ============================================================
   # 1. DJANGO BACKEND
   # ============================================================
+
   - type: web
     name: amardoctor-backend
     runtime: python
     rootDir: backend
+    plan: free
 
     buildCommand: "./build.sh"
 
     startCommand: "gunicorn config.wsgi:application"
-
-    plan: free
 
     envVars:
       - key: PYTHON_VERSION
@@ -34,6 +34,7 @@ services:
   # ============================================================
   # 2. REACT FRONTEND
   # ============================================================
+
   - type: web
     name: amardoctor-frontend
     runtime: static
@@ -42,8 +43,6 @@ services:
     buildCommand: "npm install && npm run build"
 
     staticPublishPath: "dist"
-
-    plan: free
 
     routes:
       - type: rewrite
@@ -60,6 +59,7 @@ services:
 # ============================================================
 # 3. POSTGRESQL DATABASE
 # ============================================================
+
 databases:
   - name: amardoctor-db
     plan: free
