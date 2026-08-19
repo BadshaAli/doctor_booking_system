@@ -1,5 +1,5 @@
 """
-Django settings for AmarDoctor project (Render & Local Ready).
+Django settings for AmarDoctor project (Local & Render Ready).
 """
 
 import os
@@ -14,8 +14,29 @@ SECRET_KEY = os.environ.get(
 
 DEBUG = os.environ.get('DEBUG', 'True').lower() in ('true', '1', 'yes')
 
-ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '*').split(',') if os.environ.get('ALLOWED_HOSTS') else ['*']
+# ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '127.0.0.1,localhost').split(',')
 
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.environ.get(
+        "ALLOWED_HOSTS",
+        ""
+    ).split(",")
+    if host.strip()
+]
+
+if os.environ.get("RENDER_EXTERNAL_HOSTNAME"):
+    ALLOWED_HOSTS.append(
+        os.environ["RENDER_EXTERNAL_HOSTNAME"]
+    )
+
+if DEBUG:
+    ALLOWED_HOSTS.extend([
+        "localhost",
+        "127.0.0.1",
+    ])
+    
+    
 # Application definition
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -39,11 +60,11 @@ MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
 ]
 
-# Add whitenoise middleware when available (serves static files in production)
+# Add whitenoise middleware when available (serves static files on Render)
 try:
-    import whitenoise  # noqa: F401
+    import whitenoise
     MIDDLEWARE.append('whitenoise.middleware.WhiteNoiseMiddleware')
-except Exception:
+except ImportError:
     pass
 
 MIDDLEWARE.extend([
@@ -90,7 +111,7 @@ TEMPLATES = [
 WSGI_APPLICATION = 'config.wsgi.application'
 
 # Database
-# Default: SQLite for local development. In production, set DATABASE_URL.
+# Default: SQLite for local dev. On Render (when DATABASE_URL is present), use PostgreSQL via dj_database_url
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
@@ -98,12 +119,11 @@ DATABASES = {
     }
 }
 
-if os.environ.get('DATABASE_URL'):
+if 'DATABASE_URL' in os.environ:
     try:
         import dj_database_url
-
         DATABASES['default'] = dj_database_url.config(conn_max_age=600)
-    except Exception:
+    except ImportError:
         pass
 
 AUTH_PASSWORD_VALIDATORS = [
@@ -129,12 +149,5 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
-# Use WhiteNoise static files storage in production when available
-try:
-    # CompressedManifestStaticFilesStorage requires running collectstatic when building
-    from whitenoise.storage import CompressedManifestStaticFilesStorage  # noqa: F401
-    STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
-except Exception:
-    STATICFILES_STORAGE = 'django.contrib.staticfiles.storage.StaticFilesStorage'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
